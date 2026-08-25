@@ -15,7 +15,7 @@ from telegram.ext import (
 )
 
 # --- TETAPAN UTAMA ---
-TOKEN = "G8958337405:AAGHn0WHceQBV48dges6i8jHelthYa-c9hk"
+TOKEN = "8958337405:AAGHn0WHceQBV48dges6i8jHelthYa-c9hk"
 DOMAIN_URL = "https://omr-checkers-bot.onrender.com"  # Ganti dengan URL Cloud Server anda (Render/Koyeb)
 
 # Globals untuk Flask & Telegram
