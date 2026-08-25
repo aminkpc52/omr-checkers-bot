@@ -4,7 +4,7 @@ import threading
 import asyncio
 import numpy as np
 import cv2
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, request, jsonify, render_template_string
 
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
@@ -14,13 +14,114 @@ from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 )
 
-# --- CONFIGURATION ---
-TOKEN = "8958337405:AAGHn0WHceQBV48dges6i8jHelthYa-c9hk"
-DOMAIN_URL = "https://omr-checkers-bot.onrender.com"  # Ganti dengan URL Cloud Server anda (Render/Koyeb)
+# --- TETAPAN UTAMA ---
+TOKEN = "GANTI_TOKEN_BOT_ANDA_DI_SINI"
+DOMAIN_URL = "https://omr-checkers.onrender.com"  # Ganti dengan URL Cloud Server anda (Render/Koyeb)
 
-# Globals untuk interaksi Flask & Telegram Event Loop
+# Globals untuk Flask & Telegram
 bot_loop = None
 bot_app = None
+
+# --- HTML KAMERA WEB APP (INLINE) ---
+HTML_CAMERA = """
+<!DOCTYPE html>
+<html lang="ms">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OMR Camera Scanner</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { background-color: #000; font-family: sans-serif; text-align: center; color: white; overflow: hidden; }
+        .camera-container { position: relative; width: 100vw; height: 80vh; background: black; }
+        video { width: 100%; height: 100%; object-fit: cover; }
+        
+        /* Grid Overlay ala ZipGrade */
+        .overlay {
+            position: absolute; top: 10%; left: 8%; width: 84%; height: 80%;
+            border: 2px dashed rgba(0, 255, 0, 0.7);
+            box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.5);
+            pointer-events: none;
+        }
+        .corner { position: absolute; width: 35px; height: 35px; border: 4px solid #00FF00; }
+        .tl { top: -2px; left: -2px; border-right: none; border-bottom: none; }
+        .tr { top: -2px; right: -2px; border-left: none; border-bottom: none; }
+        .bl { bottom: -2px; left: -2px; border-right: none; border-top: none; }
+        .br { bottom: -2px; right: -2px; border-left: none; border-top: none; }
+
+        .btn-container { height: 20vh; display: flex; align-items: center; justify-content: center; }
+        button {
+            background-color: #28a745; color: white; border: none;
+            padding: 16px 45px; font-size: 18px; font-weight: bold;
+            border-radius: 50px; cursor: pointer; box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+        }
+        button:active { transform: scale(0.95); }
+    </style>
+</head>
+<body>
+    <div class="camera-container">
+        <video id="webcam" autoplay playsinline></video>
+        <div class="overlay">
+            <div class="corner tl"></div>
+            <div class="corner tr"></div>
+            <div class="corner bl"></div>
+            <div class="corner br"></div>
+        </div>
+    </div>
+    
+    <div class="btn-container">
+        <button id="snap-btn" onclick="captureAndSend()">📸 TANGKAP & SEMAK</button>
+    </div>
+
+    <canvas id="canvas" style="display:none;"></canvas>
+
+    <script>
+        const tg = window.Telegram.WebApp;
+        tg.expand();
+
+        const video = document.getElementById('webcam');
+        const canvas = document.getElementById('canvas');
+
+        navigator.mediaDevices.getUserMedia({
+            video: { facingMode: { exact: "environment" } }
+        }).catch(() => {
+            return navigator.mediaDevices.getUserMedia({ video: true });
+        }).then(stream => {
+            video.srcObject = stream;
+        });
+
+        function captureAndSend() {
+            const btn = document.getElementById('snap-btn');
+            btn.innerText = "⏳ Sedang Menanda...";
+            btn.disabled = true;
+
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            const context = canvas.getContext('2d');
+            context.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+            canvas.toBlob(blob => {
+                const formData = new FormData();
+                formData.append('file', blob, 'omr_capture.jpg');
+                formData.append('user_id', tg.initDataUnsafe.user ? tg.initDataUnsafe.user.id : '');
+
+                fetch('/upload_omr', {
+                    method: 'POST',
+                    body: formData
+                }).then(res => res.json()).then(data => {
+                    tg.close();
+                }).catch(err => {
+                    alert("Ralat menghantar gambar: " + err);
+                    btn.disabled = false;
+                    btn.innerText = "📸 TANGKAP & SEMAK";
+                });
+            }, 'image/jpeg', 0.95);
+        }
+    </script>
+</body>
+</html>
+"""
 
 # --- PELAYAN WEB FLASK ---
 app_web = Flask(__name__)
@@ -31,7 +132,7 @@ def index():
 
 @app_web.route('/camera')
 def camera_page():
-    return render_template('camera.html')
+    return render_template_string(HTML_CAMERA)
 
 @app_web.route('/upload_omr', methods=['POST'])
 def upload_omr():
@@ -53,12 +154,12 @@ def run_web():
     port = int(os.environ.get("PORT", 8080))
     app_web.run(host="0.0.0.0", port=port)
 
-# --- PENJANAAN PDF OMR (REPORTLAB) ---
+# --- JANA PDF OMR ---
 def jana_pdf_omr(jumlah_soalan):
     buffer = io.BytesIO()
     c = canvas.Canvas(buffer, pagesize=letter)
     
-    # Lukis 4 Kotak Penjuru (Bucu Marker)
+    # 4 Marker Bucu Kertas
     c.rect(20, 750, 20, 20, fill=1)
     c.rect(570, 750, 20, 20, fill=1)
     c.rect(20, 30, 20, 20, fill=1)
@@ -101,7 +202,7 @@ def jana_pdf_omr(jumlah_soalan):
     buffer.seek(0)
     return buffer
 
-# --- PEMPROSESAN IMEJ (OPENCV & PERSPECTIVE TRANSFORM) ---
+# --- PEMPROSESAN OPENCV ---
 def luruskan_gambar(imej):
     kelabu = cv2.cvtColor(imej, cv2.COLOR_BGR2GRAY)
     blur = cv2.GaussianBlur(kelabu, (5, 5), 0)
@@ -179,7 +280,7 @@ def analisa_omr(image_bytes, skema_semasa):
         _, buffer_imej = cv2.imencode(".jpg", imej)
         msg = f"Ralat: Terjumpa {jumlah_bulatan} bulatan. Sepatutnya 80, 160, atau 200."
         if not berjaya_lurus:
-            msg += "\n💡 Pastikan 4 kotak bucu hitam kelihatan jelas."
+            msg += "\n💡 Pastikan 4 kotak bucu hitam kelihatan jelas pada skrin."
         return buffer_imej, msg, False
 
     jumlah_soalan = jumlah_bulatan // 4
@@ -219,14 +320,13 @@ def analisa_omr(image_bytes, skema_semasa):
     _, buffer_imej = cv2.imencode(".jpg", imej)
     return buffer_imej, msg, True
 
-# --- HANDLER TELEGRAM BOT ---
+# --- BOT TELEGRAM HANDLERS ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     mesej = (
-        "🤖 <b>Selamat Datang ke Bot OMR Pro!</b>\n\n"
-        "Senarai Arahan:\n"
-        "1. /bina_omr - Hasilkan kertas jawapan PDF.\n"
-        "2. /set_skema - Masukkan skema jawapan anda.\n"
-        "3. /semak - Mula menyemak kertas pelajar."
+        "🤖 <b>Selamat Datang ke Bot OMR Checkers!</b>\n\n"
+        "1. /bina_omr - Hasilkan PDF Kertas Jawapan OMR\n"
+        "2. /set_skema - Masukkan Skema Jawapan\n"
+        "3. /semak - Mula Menyemak (Guna Kamera Grid)"
     )
     await update.message.reply_text(mesej, parse_mode="HTML")
 
@@ -256,7 +356,7 @@ async def semak(update: Update, context: ContextTypes.DEFAULT_TYPE):
         one_time_keyboard=True
     )
     await update.message.reply_text(
-        "Sila tekan butang di bawah untuk buka Kamera Grid, atau terus muat naik gambar kertas OMR secara biasa:",
+        "Sila tekan butang di bawah untuk membuka Kamera Grid OMR:",
         reply_markup=keyboard
     )
 
@@ -305,7 +405,6 @@ async def terima_gambar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     fail_gambar = await update.message.photo[-1].get_file()
     image_bytes = await fail_gambar.download_as_bytearray()
     
-    # Guna skema 20 sebagai lalai jika belum diset
     skema_semasa = context.user_data.get('skema_20') or context.user_data.get('skema_40') or context.user_data.get('skema_50')
     img_buf, msg, _ = analisa_omr(image_bytes, skema_semasa)
     
@@ -323,12 +422,10 @@ async def post_init(application: Application):
     bot_loop = asyncio.get_running_loop()
 
 if __name__ == '__main__':
-    # Hidupkan Server Web Flask di latar belakang
     t = threading.Thread(target=run_web)
     t.daemon = True
     t.start()
 
-    # Hidupkan Bot Telegram
     print("Bot OMR Checkers sedang dipasang...")
     bot_app = Application.builder().token(TOKEN).post_init(post_init).build()
 
