@@ -22,7 +22,7 @@ DOMAIN_URL = "https://omr-checkers.onrender.com"  # Ganti dengan URL Cloud Serve
 bot_loop = None
 bot_app = None
 
-# --- HTML KAMERA WEB APP (INLINE WITH USER_ID FIX) ---
+# --- HTML KAMERA WEB APP (INLINE WITH FIX KAMERA GELAP & USER_ID) ---
 HTML_CAMERA = """
 <!DOCTYPE html>
 <html lang="ms">
@@ -34,7 +34,7 @@ HTML_CAMERA = """
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { background-color: #000; font-family: sans-serif; text-align: center; color: white; overflow: hidden; }
-        .camera-container { position: relative; width: 100vw; height: 80vh; background: black; }
+        .camera-container { position: relative; width: 100vw; height: 80vh; background: black; display: flex; align-items: center; justify-content: center; }
         video { width: 100%; height: 100%; object-fit: cover; }
         
         /* Grid Overlay ala ZipGrade */
@@ -61,7 +61,8 @@ HTML_CAMERA = """
 </head>
 <body>
     <div class="camera-container">
-        <video id="webcam" autoplay playsinline></video>
+        <!-- muted & playsinline diwajibkan oleh WebView Telegram elak skrin gelap -->
+        <video id="webcam" autoplay playsinline muted></video>
         <div class="overlay">
             <div class="corner tl"></div>
             <div class="corner tr"></div>
@@ -83,13 +84,27 @@ HTML_CAMERA = """
         const video = document.getElementById('webcam');
         const canvas = document.getElementById('canvas');
 
-        navigator.mediaDevices.getUserMedia({
-            video: { facingMode: { exact: "environment" } }
-        }).catch(() => {
-            return navigator.mediaDevices.getUserMedia({ video: true });
-        }).then(stream => {
-            video.srcObject = stream;
-        });
+        async function startCamera() {
+            const constraints = [
+                { video: { facingMode: { ideal: "environment" } } },
+                { video: { facingMode: "environment" } },
+                { video: true }
+            ];
+
+            for (let constraint of constraints) {
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia(constraint);
+                    video.srcObject = stream;
+                    await video.play();
+                    return;
+                } catch (e) {
+                    console.log("Mencuba tetapan kamera...", e);
+                }
+            }
+            alert("Gagal membuka kamera. Pastikan kebenaran kamera telah dibenarkan.");
+        }
+
+        window.addEventListener('DOMContentLoaded', startCamera);
 
         function captureAndSend() {
             const btn = document.getElementById('snap-btn');
@@ -101,7 +116,6 @@ HTML_CAMERA = """
             const context = canvas.getContext('2d');
             context.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-            // Ambil user_id dari URL parameter atau Telegram WebApp
             const urlParams = new URLSearchParams(window.location.search);
             let userId = urlParams.get('user_id');
             if (!userId && tg.initDataUnsafe && tg.initDataUnsafe.user) {
@@ -181,7 +195,6 @@ def jana_pdf_omr(jumlah_soalan):
     buffer = io.BytesIO()
     c = canvas.Canvas(buffer, pagesize=letter)
     
-    # 4 Marker Bucu Kertas
     c.rect(20, 750, 20, 20, fill=1)
     c.rect(570, 750, 20, 20, fill=1)
     c.rect(20, 30, 20, 20, fill=1)
@@ -371,7 +384,6 @@ async def set_skema(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def semak(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     context.user_data['status'] = 'tunggu_gambar'
-    # Hantar ID pengguna terus dalam URL kamera untuk elak isu WebApp tiada ID
     url_kamera = f"{DOMAIN_URL}/camera?user_id={user_id}"
     
     keyboard = ReplyKeyboardMarkup(
