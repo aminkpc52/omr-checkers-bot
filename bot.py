@@ -15,14 +15,14 @@ from telegram.ext import (
 )
 
 # --- TETAPAN UTAMA ---
-TOKEN = "8958337405:AAGHn0WHceQBV48dges6i8jHelthYa-c9hk"
-DOMAIN_URL = "https://omr-checkers-bot.onrender.com"  # Ganti dengan URL Cloud Server anda (Render/Koyeb)
+TOKEN = "GANTI_TOKEN_BOT_ANDA_DI_SINI"
+DOMAIN_URL = "https://omr-checkers.onrender.com"  # Ganti dengan URL Cloud Server anda (Render/Koyeb)
 
 # Globals untuk Flask & Telegram
 bot_loop = None
 bot_app = None
 
-# --- HTML KAMERA WEB APP (INLINE) ---
+# --- HTML KAMERA WEB APP (INLINE WITH USER_ID FIX) ---
 HTML_CAMERA = """
 <!DOCTYPE html>
 <html lang="ms">
@@ -101,18 +101,31 @@ HTML_CAMERA = """
             const context = canvas.getContext('2d');
             context.drawImage(video, 0, 0, canvas.width, canvas.height);
 
+            // Ambil user_id dari URL parameter atau Telegram WebApp
+            const urlParams = new URLSearchParams(window.location.search);
+            let userId = urlParams.get('user_id');
+            if (!userId && tg.initDataUnsafe && tg.initDataUnsafe.user) {
+                userId = tg.initDataUnsafe.user.id;
+            }
+
             canvas.toBlob(blob => {
                 const formData = new FormData();
                 formData.append('file', blob, 'omr_capture.jpg');
-                formData.append('user_id', tg.initDataUnsafe.user ? tg.initDataUnsafe.user.id : '');
+                formData.append('user_id', userId || '');
 
                 fetch('/upload_omr', {
                     method: 'POST',
                     body: formData
                 }).then(res => res.json()).then(data => {
-                    tg.close();
+                    if (data.status === 'success') {
+                        tg.close();
+                    } else {
+                        alert("Ralat: " + (data.error || "Gagal memproses gambar."));
+                        btn.disabled = false;
+                        btn.innerText = "📸 TANGKAP & SEMAK";
+                    }
                 }).catch(err => {
-                    alert("Ralat menghantar gambar: " + err);
+                    alert("Ralat sambungan: " + err);
                     btn.disabled = false;
                     btn.innerText = "📸 TANGKAP & SEMAK";
                 });
@@ -137,18 +150,27 @@ def camera_page():
 @app_web.route('/upload_omr', methods=['POST'])
 def upload_omr():
     if 'file' not in request.files:
-        return jsonify({'error': 'Tiada fail'}), 400
+        return jsonify({'error': 'Tiada fail gambar diterima'}), 400
     
     user_id = request.form.get('user_id')
+    if not user_id or user_id.strip() == '':
+        return jsonify({'error': 'ID Pengguna Telegram tidak dijumpai'}), 400
+
     file = request.files['file']
     image_bytes = file.read()
     
-    if bot_app and user_id and bot_loop:
-        asyncio.run_coroutine_threadsafe(
-            proses_dan_hantar_hasil(int(user_id), image_bytes),
-            bot_loop
-        )
-    return jsonify({'status': 'success'})
+    try:
+        uid = int(user_id)
+        if bot_app and bot_loop:
+            asyncio.run_coroutine_threadsafe(
+                proses_dan_hantar_hasil(uid, image_bytes),
+                bot_loop
+            )
+            return jsonify({'status': 'success'})
+        else:
+            return jsonify({'error': 'Pelayan bot belum bersedia'}), 500
+    except Exception as e:
+        return jsonify({'error': f"Ralat Server: {e}"}), 500
 
 def run_web():
     port = int(os.environ.get("PORT", 8080))
@@ -347,8 +369,10 @@ async def set_skema(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Pilih jenis skema yang nak ditetapkan:", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def semak(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
     context.user_data['status'] = 'tunggu_gambar'
-    url_kamera = f"{DOMAIN_URL}/camera"
+    # Hantar ID pengguna terus dalam URL kamera untuk elak isu WebApp tiada ID
+    url_kamera = f"{DOMAIN_URL}/camera?user_id={user_id}"
     
     keyboard = ReplyKeyboardMarkup(
         [[KeyboardButton(text="📷 Buka Kamera OMR (Grid)", web_app=WebAppInfo(url=url_kamera))]],
@@ -412,10 +436,13 @@ async def terima_gambar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['status'] = None
 
 async def proses_dan_hantar_hasil(user_id, image_bytes):
-    user_data = bot_app.user_data.get(user_id, {})
-    skema_semasa = user_data.get('skema_20') or user_data.get('skema_40') or user_data.get('skema_50')
-    img_buf, msg, _ = analisa_omr(image_bytes, skema_semasa)
-    await bot_app.bot.send_photo(chat_id=user_id, photo=io.BytesIO(img_buf), caption=msg, parse_mode="Markdown")
+    try:
+        user_data = bot_app.user_data.get(user_id, {})
+        skema_semasa = user_data.get('skema_20') or user_data.get('skema_40') or user_data.get('skema_50')
+        img_buf, msg, _ = analisa_omr(image_bytes, skema_semasa)
+        await bot_app.bot.send_photo(chat_id=user_id, photo=io.BytesIO(img_buf), caption=msg, parse_mode="Markdown")
+    except Exception as e:
+        await bot_app.bot.send_message(chat_id=user_id, text=f"⚠️ Ralat semasa memproses gambar: {e}")
 
 async def post_init(application: Application):
     global bot_loop
